@@ -2,48 +2,40 @@ from logger import Logger
 
 from .validar_campos import validar_NIU, validar_cod_conexion,validar_comercializador, validar_conex_red, validar_consu_act, validar_id_mercado,validar_nivel_tension_sec,validar_nivel_tension_prim,validar_cargo_inversion,validar_tipo_conexion, validar_consistencias_tension_y_cargo
 
-def validar_registro(campos: list[str], num_fila: int) -> bool:
-    """Valida un registro completo y reporta errores"""
+def validar_registro(campos: list[str], num_fila: int) -> tuple[str, int, int]:
+    """Valida un registro completo y reporta errores.
+    
+    Retorna: (estado, num_errores, num_advertencias)
+    """
     if len(campos) != 10:
         Logger.add_to_log("error", f"❌ Fila {num_fila}: Número incorrecto de campos ({len(campos)}, esperados 10)")
-        #print(f"❌ Fila {num_fila}: Número incorrecto de campos ({len(campos)}, esperados 10)")
-        return False
+        return "error", 1, 0
     
     errores = []
     advertencias = []
     
-    # Validar cada campo
-    ok, msg = validar_NIU(campos[0])
-    if not ok: errores.append(msg)
-    if ok == 2: advertencias.append(msg)
+    # Validar cada campo usando tabla de validadores
+    validadores = [
+        (validar_NIU, campos[0], "NIU"),
+        (validar_comercializador, campos[1], "comercializador"),
+        (validar_nivel_tension_sec, campos[2], "nivel_tension_sec"),
+        (validar_nivel_tension_prim, campos[3], "nivel_tension_prim"),
+        (validar_cargo_inversion, campos[4], "cargo_inversion"),
+        (validar_tipo_conexion, campos[5], "tipo_conexion"),
+        (validar_cod_conexion, campos[6], "cod_conexion"),
+        (validar_conex_red, campos[7], "conex_red"),
+        (validar_consu_act, campos[8], "consu_act"),
+        (validar_id_mercado, campos[9], "id_mercado"),
+    ]
     
-    ok, msg = validar_comercializador(campos[1])
-    if not ok: errores.append(msg)
+    for validador, valor, _ in validadores:
+        ok, msg = validador(valor)
+        if ok == 2:  # Caso especial: NIU con valor especial
+            advertencias.append(msg)
+        elif not ok:
+            errores.append(msg)
     
-    ok, msg = validar_nivel_tension_sec(campos[2])
-    if not ok: errores.append(msg)
-    
-    ok, msg = validar_nivel_tension_prim(campos[3])
-    if not ok: errores.append(msg)
-    
-    ok, msg = validar_cargo_inversion(campos[4])
-    if not ok: errores.append(msg)
-    
-    ok, msg = validar_tipo_conexion(campos[5])
-    if not ok: errores.append(msg)
-    
-    ok, msg = validar_cod_conexion(campos[6])
-    if not ok: errores.append(msg)
-    
-    ok, msg = validar_conex_red(campos[7])
-    if not ok: errores.append(msg)
-    
-    ok, msg = validar_consu_act(campos[8])
-    if not ok: errores.append(msg)
-
-    ok, msg = validar_id_mercado(campos[9])
-    if not ok: errores.append(msg)
-    
+    # Validar consistencias entre campos
     advertencias.extend(
         validar_consistencias_tension_y_cargo(
             campos[2],
@@ -51,27 +43,66 @@ def validar_registro(campos: list[str], num_fila: int) -> bool:
             campos[4],
         )
     )
-
-
-
+    
     # Reportar resultado
+    estado = "ok"
     if errores:
-        #print(f"\nFila {num_fila}: {campos}")
-        #print(f"❌ Fila {num_fila}: {len(errores)} error(es)")
-        #for...
-        ##print(f"   • {error}")
-    #else:
-    ##print(f"✅ Fila {num_fila}: OK - {campos}")#Muestra los campos que están correctos, pero no es necesario
-
-
-        Logger.add_to_log("info", f"Fila {num_fila}: {campos}")
+        Logger.add_to_log("info", f"\n\nFila {num_fila}: {campos}")
         Logger.add_to_log("error", f"❌ Fila {num_fila}: {len(errores)} error(es)")
+
+        if advertencias:
+            Logger.add_to_log("info", f"⚠️ Fila {num_fila}: {len(advertencias)} advertencia(s)")
+            for advertencia in advertencias:
+                Logger.add_to_log("warn", f"   • {advertencia}")
 
         for error in errores:
             Logger.add_to_log("error", f"   • {error}")
-        return False
+        
+        estado = "error_warning" if advertencias else "error"
     elif advertencias:
         Logger.add_to_log("info", f"⚠️ Fila {num_fila}: {len(advertencias)} advertencia(s)")
         for advertencia in advertencias:
             Logger.add_to_log("warn", f"   • {advertencia}")
-        return True
+        estado = "warning"
+    
+    return estado, len(errores), len(advertencias)
+
+
+def validar_archivo(lineas: list[str]) -> dict:
+    """Procesa todos los registros del archivo y genera dos tipos de resumen.
+    
+    Args:
+        lineas: Lista de líneas del archivo (incluyendo encabezado)
+    
+    Retorna: Dict con resumen de filas y resumen de errores/advertencias totales
+    """
+    filas_validas = 0
+    filas_con_problemas = 0
+    total_errores = 0
+    total_advertencias = 0
+    
+    # Procesar cada fila (saltar encabezado en índice 0)
+    for i, linea in enumerate(lineas[1:], start=1):
+        campos = linea.rstrip('\n').split(';')
+        _, errores_fila, advertencias_fila = validar_registro(campos, i)
+        
+        total_errores += errores_fila
+        total_advertencias += advertencias_fila
+        
+        if errores_fila == 0 and advertencias_fila == 0:
+            filas_validas += 1
+        else:
+            filas_con_problemas += 1
+    
+    return {
+        "resumen_filas": {
+            "validas": filas_validas,
+            "con_problemas": filas_con_problemas,
+            "total": len(lineas) - 1,
+        },
+        "resumen_datos": {
+            "total_errores": total_errores,
+            "total_advertencias": total_advertencias,
+            "total_registros": len(lineas) - 1,
+        },
+    }
